@@ -34,7 +34,7 @@ PTC-V1/
 ### Step 1: Upload Files to Your Laravel Script
 1. Copy the `core` directory to your Laravel script root directory:
    - File target: `core/app/Http/Controllers/Gateway/TZPAYWAY/ProcessController.php`
-2. Open your website's `routes/ipn.php` file and append the following route definitions:
+2. Open your website's `routes/ipn.php` or `routes/api.php` or `routes/web.php` file and append the following route definitions:
 
 ```php
 // TZPayWay Webhook IPN
