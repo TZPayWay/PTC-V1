@@ -24,7 +24,6 @@ PTC-V1/
 ├── routes/
 │   └── ipn.php
 ├── database.sql
-├── databse.sql
 ├── .gitignore
 └── README.md
 ```
