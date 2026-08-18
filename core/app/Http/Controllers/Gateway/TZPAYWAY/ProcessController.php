@@ -197,10 +197,41 @@ class ProcessController extends Controller
         $customerEmail = $user ? ($user->email ?? 'customer@example.com') : 'customer@example.com';
         $customerMobile = $user ? ($user->mobile ?? ($user->phone ?? '')) : '';
 
+        // Safe URL resolution for Viserlab scripts
+        $successUrl = url('/user/deposit/history');
+        $cancelUrl = url('/user/deposit');
+        if (function_exists('gatewayRedirectUrl')) {
+            try {
+                $successRoute = gatewayRedirectUrl(true);
+                if (\Illuminate\Support\Facades\Route::has($successRoute)) {
+                    $successUrl = route($successRoute);
+                }
+                $cancelRoute = gatewayRedirectUrl(false);
+                if (\Illuminate\Support\Facades\Route::has($cancelRoute)) {
+                    $cancelUrl = route($cancelRoute);
+                }
+            } catch (\Throwable $e) {}
+        }
+
+        $alias = $deposit->gateway->alias ?? 'TZPAYWAY';
+        $webhookUrl = url('/ipn/' . $alias);
+        if (\Illuminate\Support\Facades\Route::has('ipn.' . $alias)) {
+            $webhookUrl = route('ipn.' . $alias);
+        } elseif (\Illuminate\Support\Facades\Route::has($alias)) {
+            $webhookUrl = route($alias);
+        } elseif (\Illuminate\Support\Facades\Route::has('ipn.tzpayway')) {
+            $webhookUrl = route('ipn.tzpayway');
+        } elseif (\Illuminate\Support\Facades\Route::has('ipn.TZPAYWAY')) {
+            $webhookUrl = route('ipn.TZPAYWAY');
+        }
+
         // Prepare request payload for TZPayWay API V1
         $postData = [
             'amount' => (float) round($deposit->final_amo ?? $deposit->final_amount ?? $deposit->amount, 2),
             'currency' => $deposit->method_currency ?? ($deposit->currency ?? 'BDT'),
+            'cus_name' => $customerName,
+            'cus_email' => $customerEmail,
+            'cus_number' => $customerMobile,
             'user_data' => [
                 'track' => $deposit->trx,
                 'deposit_id' => $deposit->id,
@@ -209,9 +240,9 @@ class ProcessController extends Controller
                 'customer_email' => $customerEmail,
                 'customer_mobile' => $customerMobile,
             ],
-            'success_url' => function_exists('gatewayRedirectUrl') ? route(gatewayRedirectUrl(true)) : (url('/user/deposit/history')),
-            'cancel_url' => function_exists('gatewayRedirectUrl') ? route(gatewayRedirectUrl()) : (url('/user/deposit')),
-            'webhook_url' => route('ipn.' . ($deposit->gateway->alias ?? 'TZPAYWAY')),
+            'success_url' => $successUrl,
+            'cancel_url' => $cancelUrl,
+            'webhook_url' => $webhookUrl,
         ];
 
         // Send POST request to TZPayWay API V1
@@ -412,6 +443,9 @@ class ProcessController extends Controller
                 'status' => $status,
                 'currency' => $payload['currency'] ?? ($deposit->method_currency ?? 'BDT'),
                 'method' => $payload['method'] ?? ($deposit->gateway->alias ?? 'TZPAYWAY'),
+                'cus_name' => $payload['cus_name'] ?? ($payload['user_data']['customer_name'] ?? null),
+                'cus_email' => $payload['cus_email'] ?? ($payload['user_data']['customer_email'] ?? null),
+                'cus_number' => $payload['cus_number'] ?? ($payload['user_data']['customer_mobile'] ?? null),
                 'paid_at' => $payload['paid_at'] ?? now()->toIso8601String(),
                 'user_data' => $payload['user_data'] ?? null,
                 'verified_at' => now()->toDateTimeString(),
@@ -447,9 +481,25 @@ class ProcessController extends Controller
 
             // Update user balance and complete deposit in Viserlab
             if ($deposit->status == 0) {
-                try {
-                    PaymentController::userDataUpdate($deposit);
-                } catch (\Throwable $e) {
+                $completed = false;
+                if (class_exists('App\Http\Controllers\Gateway\PaymentController')) {
+                    try {
+                        PaymentController::userDataUpdate($deposit);
+                        $completed = true;
+                    } catch (\Throwable $e1) {
+                        try {
+                            PaymentController::userDataUpdate($deposit, true);
+                            $completed = true;
+                        } catch (\Throwable $e2) {
+                            try {
+                                PaymentController::userDataUpdate($deposit->trx);
+                                $completed = true;
+                            } catch (\Throwable $e3) {}
+                        }
+                    }
+                }
+
+                if (!$completed) {
                     $deposit->status = 1;
                     $deposit->save();
 
